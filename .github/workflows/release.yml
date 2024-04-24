@@ -1,6 +1,8 @@
 name: Release
 
 on:
+  create:
+    tags: [v*]
   workflow_dispatch:
 
 jobs:
@@ -9,26 +11,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v2
+      - uses: pdm-project/setup-pdm@v3
         with:
-          python-version: 3.8
-
-      - uses: Gr1N/setup-poetry@v4
-
-      - uses: actions/cache@v2
-        with:
-          path: ~/.cache/pypoetry
-          key: ${{ runner.os }}-poetry-${{ hashFiles('poetry.lock') }}
+          python-version: 3.9
 
       - name: Install Dependencies
         run: |
-          poetry config virtualenvs.create false
-          poetry install -vvv
+          pdm install --prod
 
       - name: Release to PyPI
         env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+          PDM_PUBLISH_USERNAME: __token__
+          PDM_PUBLISH_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
-          poetry publish --build
+          pdm publish

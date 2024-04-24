@@ -7,8 +7,6 @@
 #
 # An alternative implement of Imjad API
 
-debug: false # 是否开启Debug模式
-
 data:
   temp-expiry: 7 # 临时文件目录文件过期时间, 单位为天
   path: ./data # data目录所在位置
@@ -18,7 +16,9 @@ server:
   port: 8080 # 端口
   gzip: true
 
-  domains: null # 限定来源域名, 设置为null为不限制
+  # 限定来源域名, 支持通配符, 参考:
+  # https://fastapi.tiangolo.com/advanced/middleware/#trustedhostmiddleware
+  allowed: ["*"]
 
   cors:
     origins:
@@ -32,10 +32,16 @@ server:
 
   allowed-forward: null # Reference: https://stackoverflow.com/questions/63511413
 
+limit: # 单IP速率限制策略
+  enabled: true
+  max: 60 # 每个单位时间内最大请求数
+  interval: 60 # 单位时间长度, 单位为秒
+
 cache:
   enabled: true # 设置是否启用缓存
   ttl: 3600 # 缓存默认生存时间, 单位为秒
-  uri: "memory://" # 缓存URI
+  uri: "mem://" # 缓存URI
+  controllable: true # 配置是否可以通过Cache-Control请求头刷新缓存
 
 log:
   level: INFO # 日志等级, 可选 [TRACE,DEBUG,INFO,WARNING,ERROR]
@@ -44,6 +50,9 @@ log:
     <v>{level:<8}</v>
     [{time:YYYY/MM/DD} {time:HH:mm:ss.SSS} <d>{module}:{name}:{line}</d>]</level>
     {message}
+
+  # file: logs/{time.log}
+  file: null # 日志输出文件位置, 相对于data目录, 为空则不保存
 
   sentry:
     enabled: false

@@ -1,69 +1,52 @@
 import base64
 import json
-from enum import Enum, IntEnum
+import secrets
+import string
+from datetime import timedelta
+from enum import IntEnum
 from ipaddress import IPv4Address
 from random import randint
-from secrets import token_urlsafe
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Optional
 
 from Cryptodome.Cipher import AES
 from Cryptodome.Util.Padding import pad
+from fastapi import Query
 
-from hibiapi.utils.cache import disable_cache
+from hibiapi.api.netease.constants import NeteaseConstants
+from hibiapi.utils.cache import cache_config
+from hibiapi.utils.decorators import enum_auto_doc
 from hibiapi.utils.exceptions import UpstreamAPIException
 from hibiapi.utils.net import catch_network_error
-from hibiapi.utils.routing import BaseEndpoint
-
-from .constants import NeteaseConstants
+from hibiapi.utils.routing import BaseEndpoint, dont_route
 
 
-class EndpointsType(str, Enum):
-    search = "search"
-    artist = "artist"
-    album = "album"
-    detail = "detail"
-    song = "song"
-    playlist = "playlist"
-    lyric = "lyric"
-    mv = "mv"
-    comments = "comments"
-    record = "record"
-    djradio = "djradio"
-    dj = "dj"
-    detail_dj = "detail_dj"
-
-
+@enum_auto_doc
 class SearchType(IntEnum):
-    """
-    搜索内容类型
-
-    | **数值** | **含义** |
-    |---|---|
-    | 1  | 单曲 |
-    | 10  | 专辑 |
-    | 100  | 歌手 |
-    | 1000  | 歌单 |
-    | 1002  | 用户 |
-    | 1004  | mv |
-    | 1006  | 歌词 |
-    | 1009  | 主播电台 |
-    """
+    """搜索内容类型"""
 
     SONG = 1
+    """单曲"""
     ALBUM = 10
+    """专辑"""
     ARTIST = 100
+    """歌手"""
     PLAYLIST = 1000
+    """歌单"""
     USER = 1002
+    """用户"""
     MV = 1004
+    """MV"""
     LYRICS = 1006
+    """歌词"""
     DJ = 1009
+    """主播电台"""
     VIDEO = 1014
+    """视频"""
 
 
+@enum_auto_doc
 class BitRateType(IntEnum):
-    """
-    歌曲码率
-    """
+    """歌曲码率"""
 
     LOW = 64000
     MEDIUM = 128000
@@ -71,21 +54,29 @@ class BitRateType(IntEnum):
     HIGH = 320000
 
 
-class RecordPeriodType(IntEnum):
-    """
-    听歌记录时段类型
+@enum_auto_doc
+class MVResolutionType(IntEnum):
+    """MV分辨率"""
 
-    | **数值** | **含义** |
-    |---|---|
-    | 0 | 所有时段 |
-    | 1 | 本周 |
-    """
+    QVGA = 240
+    VGA = 480
+    HD = 720
+    FHD = 1080
+
+
+@enum_auto_doc
+class RecordPeriodType(IntEnum):
+    """听歌记录时段类型"""
 
     WEEKLY = 1
+    """本周"""
     ALL = 0
+    """所有时段"""
 
 
 class _EncryptUtil:
+    alphabets = bytearray(ord(char) for char in string.ascii_letters + string.digits)
+
     @staticmethod
     def _aes(data: bytes, key: bytes) -> bytes:
         data = pad(data, 16) if len(data) % 16 else data
@@ -107,8 +98,8 @@ class _EncryptUtil:
         return f"{result:0>256x}"
 
     @classmethod
-    def encrypt(cls, data: Dict[str, Any]) -> Dict[str, str]:
-        secret = token_urlsafe(12).encode()
+    def encrypt(cls, data: dict[str, Any]) -> dict[str, str]:
+        secret = bytes(secrets.choice(cls.alphabets) for _ in range(16))
         secure_key = cls._rsa(bytes(reversed(secret)))
         return {
             "params": cls._aes(
@@ -123,22 +114,26 @@ class _EncryptUtil:
 
 
 class NeteaseEndpoint(BaseEndpoint):
-    @disable_cache
+    def _construct_headers(self):
+        headers = self.client.headers.copy()
+        headers["X-Real-IP"] = str(
+            IPv4Address(
+                randint(
+                    int(NeteaseConstants.SOURCE_IP_SEGMENT.network_address),
+                    int(NeteaseConstants.SOURCE_IP_SEGMENT.broadcast_address),
+                )
+            )
+        )
+        return headers
+
+    @dont_route
     @catch_network_error
     async def request(
-        self, endpoint: str, *, params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        params = {**(params or {}), "csrf_token": ""}
-        headers = {
-            "x-real-ip": str(  # random a ip address from a specificed network segment
-                IPv4Address(
-                    randint(
-                        int(NeteaseConstants.SOURCE_IP_SEGMENT.network_address),
-                        int(NeteaseConstants.SOURCE_IP_SEGMENT.broadcast_address),
-                    )
-                )
-            ),
-            **NeteaseConstants.DEFAULT_HEADERS,
+        self, endpoint: str, *, params: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        params = {
+            **(params or {}),
+            "csrf_token": self.client.cookies.get("__csrf", ""),
         }
         response = await self.client.post(
             self._join(
@@ -146,7 +141,7 @@ class NeteaseEndpoint(BaseEndpoint):
                 endpoint=endpoint,
                 params=params,
             ),
-            headers=headers,
+            headers=self._construct_headers(),
             data=_EncryptUtil.encrypt(params),
         )
         response.raise_for_status()
@@ -165,7 +160,7 @@ class NeteaseEndpoint(BaseEndpoint):
         offset: int = 0,
     ):
         return await self.request(
-            "weapi/cloudsearch/get/web",
+            "api/cloudsearch/pc",
             params={
                 "s": s,
                 "type": search_type,
@@ -191,21 +186,31 @@ class NeteaseEndpoint(BaseEndpoint):
             },
         )
 
-    async def detail(self, *, id: int):
+    async def detail(
+        self,
+        *,
+        id: Annotated[list[int], Query()],
+    ):
         return await self.request(
-            "weapi/v3/song/detail",
+            "api/v3/song/detail",
             params={
                 "c": json.dumps(
-                    [{"id": str(id)}],
+                    [{"id": str(i)} for i in id],
                 ),
             },
         )
 
-    async def song(self, *, id: int, br: BitRateType = BitRateType.STANDARD):
+    @cache_config(ttl=timedelta(minutes=20))
+    async def song(
+        self,
+        *,
+        id: Annotated[list[int], Query()],
+        br: BitRateType = BitRateType.STANDARD,
+    ):
         return await self.request(
             "weapi/song/enhance/player/url",
             params={
-                "ids": [id],
+                "ids": [str(i) for i in id],
                 "br": br,
             },
         )
@@ -239,6 +244,20 @@ class NeteaseEndpoint(BaseEndpoint):
             "api/v1/mv/detail",
             params={
                 "id": id,
+            },
+        )
+
+    async def mv_url(
+        self,
+        *,
+        id: int,
+        res: MVResolutionType = MVResolutionType.FHD,
+    ):
+        return await self.request(
+            "weapi/song/enhance/play/mv/url",
+            params={
+                "id": id,
+                "r": res,
             },
         )
 
@@ -287,5 +306,21 @@ class NeteaseEndpoint(BaseEndpoint):
             "api/dj/program/detail",
             params={
                 "id": id,
+            },
+        )
+
+    async def user(self, *, id: int):
+        return await self.request(
+            "weapi/v1/user/detail/{id}",
+            params={"id": id},
+        )
+
+    async def user_playlist(self, *, id: int, limit: int = 50, offset: int = 0):
+        return await self.request(
+            "weapi/user/playlist",
+            params={
+                "uid": id,
+                "limit": limit,
+                "offset": offset,
             },
         )

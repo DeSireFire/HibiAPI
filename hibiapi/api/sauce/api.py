@@ -1,16 +1,15 @@
 import random
 from enum import IntEnum
 from io import BytesIO
-from typing import Any, Dict, Optional, overload
+from typing import Any, Optional, overload
 
 from httpx import HTTPError
 
-from hibiapi.utils.cache import disable_cache
+from hibiapi.api.sauce.constants import SauceConstants
+from hibiapi.utils.decorators import enum_auto_doc
 from hibiapi.utils.exceptions import ClientSideException
 from hibiapi.utils.net import catch_network_error
 from hibiapi.utils.routing import BaseEndpoint, BaseHostUrl
-
-from .constants import SauceConstants
 
 
 class UnavailableSourceException(ClientSideException):
@@ -42,20 +41,17 @@ class UploadFileIO(BytesIO):
         return v
 
 
+@enum_auto_doc
 class DeduplicateType(IntEnum):
-    """
-    0=no result deduping
-    1=consolidate booru results and dedupe by item identifier
-    2=all implemented dedupe methods such as by series name.
-    Default is 2, more levels may be added in future.
-    """
-
     DISABLED = 0
+    """no result deduplicating"""
     IDENTIFIER = 1
+    """consolidate search results and deduplicate by item identifier"""
     ALL = 2
+    """all implemented deduplicate methods such as by series name"""
 
 
-class SauceEndpoint(BaseEndpoint):
+class SauceEndpoint(BaseEndpoint, cache_endpoints=False):
     base = "https://saucenao.com"
 
     async def fetch(self, host: HostUrl) -> UploadFileIO:
@@ -72,11 +68,10 @@ class SauceEndpoint(BaseEndpoint):
         except HTTPError as e:
             raise UnavailableSourceException(detail=str(e)) from e
 
-    @disable_cache
     @catch_network_error
     async def request(
-        self, *, file: UploadFileIO, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, *, file: UploadFileIO, params: dict[str, Any]
+    ) -> dict[str, Any]:
         response = await self.client.post(
             url=self._join(
                 self.base,
@@ -103,7 +98,7 @@ class SauceEndpoint(BaseEndpoint):
         database: Optional[int] = None,
         enabled_mask: Optional[int] = None,
         disabled_mask: Optional[int] = None,
-    ):
+    ) -> dict[str, Any]:
         ...
 
     @overload
@@ -116,11 +111,10 @@ class SauceEndpoint(BaseEndpoint):
         database: Optional[int] = None,
         enabled_mask: Optional[int] = None,
         disabled_mask: Optional[int] = None,
-    ):
+    ) -> dict[str, Any]:
         ...
 
-    @disable_cache
-    async def search(  # type:ignore
+    async def search(
         self,
         *,
         url: Optional[HostUrl] = None,

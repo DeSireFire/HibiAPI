@@ -1,4 +1,4 @@
-FROM python:3.8-buster
+FROM python:bullseye
 
 EXPOSE 8080
 
@@ -10,8 +10,9 @@ COPY . /hibi
 
 WORKDIR /hibi
 
-RUN touch .env && \
-    pip install . --prefer-binary
+RUN pip install .
 
-CMD python -m hibiapi \
-    --port $PORT --workers $PROCS
+CMD hibiapi run --port $PORT --workers $PROCS
+
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD httpx --verbose --follow-redirects http://127.0.0.1:${PORT}

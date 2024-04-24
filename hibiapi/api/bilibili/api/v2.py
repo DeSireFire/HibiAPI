@@ -1,22 +1,18 @@
+from collections.abc import Coroutine
 from enum import Enum
 from functools import wraps
-from typing import Callable, Coroutine, Optional, TypeVar, Union
+from typing import Callable, Optional, TypeVar
 
-from hibiapi.utils.exceptions import ClientSideException
-from hibiapi.utils.net import AsyncHTTPClient
-from hibiapi.utils.routing import BaseEndpoint
-
-from .base import (
+from hibiapi.api.bilibili.api.base import (
     BaseBilibiliEndpoint,
-    CommentSortType,
-    CommentType,
-    RankBangumiType,
-    RankContentType,
-    RankDurationType,
     TimelineType,
     VideoFormatType,
     VideoQualityType,
 )
+from hibiapi.utils.decorators import enum_auto_doc
+from hibiapi.utils.exceptions import ClientSideException
+from hibiapi.utils.net import AsyncHTTPClient
+from hibiapi.utils.routing import BaseEndpoint
 
 _AnyCallable = TypeVar("_AnyCallable", bound=Callable[..., Coroutine])
 
@@ -32,29 +28,21 @@ def process_keyerror(function: _AnyCallable) -> _AnyCallable:
     return wrapper  # type:ignore
 
 
-class V2EndpointsType(str, Enum):
-    playurl = "playurl"
-    seasoninfo = "seasoninfo"
-    source = "source"
-    seasonrecommend = "seasonrecommend"
-    comments = "comments"
-    search = "search"
-    rank = "rank"
-    typedynamic = "typedynamic"
-    recommend = "recommend"
-    timeline = "timeline"
-    space = "space"
-    archive = "archive"
-    favlist = "favlist"
-
-
+@enum_auto_doc
 class SearchType(str, Enum):
+    """搜索类型"""
+
     search = "search"
+    """综合搜索"""
+
     suggest = "suggest"
+    """搜索建议"""
+
     hot = "hot"
+    """热门"""
 
 
-class BilibiliEndpointV2(BaseEndpoint):
+class BilibiliEndpointV2(BaseEndpoint, cache_endpoints=False):
     def __init__(self, client: AsyncHTTPClient):
         super().__init__(client)
         self.base = BaseBilibiliEndpoint(client)
@@ -62,6 +50,7 @@ class BilibiliEndpointV2(BaseEndpoint):
     @process_keyerror
     async def playurl(
         self,
+        *,
         aid: int,
         page: Optional[int] = None,
         quality: VideoQualityType = VideoQualityType.VIDEO_480P,
@@ -87,33 +76,6 @@ class BilibiliEndpointV2(BaseEndpoint):
     async def seasonrecommend(self, *, season_id: int):  # NOTE: not same with origin
         return await self.base.season_recommend(season_id=season_id)
 
-    @process_keyerror
-    async def comments(
-        self,
-        *,
-        aid: Optional[int] = None,
-        season_id: Optional[int] = None,
-        index: Optional[int] = None,
-        sort: CommentSortType = CommentSortType.TIME,
-        page: int = 1,
-        pagesize: int = 20
-    ):  # NOTE: not same with origin
-        if season_id is not None:
-            assert index is not None, "parameter 'index' is required"
-            season_info = await self.base.season_info(season_id=season_id)
-            oid = season_info["result"]["episodes"][index - 1]["av_id"]
-        elif aid is not None:
-            oid = aid
-        else:
-            raise ClientSideException
-        return await self.base.comments(
-            oid=oid,
-            sort=sort,
-            type=CommentType.VIDEO,
-            page=page,
-            pagesize=pagesize,
-        )
-
     async def search(
         self,
         *,
@@ -121,7 +83,7 @@ class BilibiliEndpointV2(BaseEndpoint):
         type: SearchType = SearchType.search,
         page: int = 1,
         pagesize: int = 20,
-        limit: int = 50
+        limit: int = 50,
     ):
         if type == SearchType.suggest:
             return await self.base.search_suggest(keyword=keyword)
@@ -133,31 +95,6 @@ class BilibiliEndpointV2(BaseEndpoint):
                 page=page,
                 pagesize=pagesize,
             )
-
-    async def rank(
-        self,
-        *,
-        content: Union[RankContentType, RankBangumiType] = RankContentType.FULL_SITE,
-        duration: RankDurationType = RankDurationType.THREE_DAY,
-        new: bool = True
-    ):
-        if isinstance(content, int):
-            return await self.base.rank_list(
-                content=content,
-                duration=duration,
-                new=new,
-            )
-        else:
-            return await self.base.rank_list_bangumi(
-                site=content,
-                duration=duration,
-            )
-
-    async def typedynamic(self):
-        return await self.base.type_dynamic()
-
-    async def recommend(self):
-        return await self.base.recommend()
 
     async def timeline(
         self, *, type: TimelineType = TimelineType.GLOBAL
@@ -171,14 +108,14 @@ class BilibiliEndpointV2(BaseEndpoint):
             pagesize=pagesize,
         )
 
-    async def archive(self, vmid: int, page: int = 1, pagesize: int = 10):
+    async def archive(self, *, vmid: int, page: int = 1, pagesize: int = 10):
         return await self.base.space_archive(
             vmid=vmid,
             page=page,
             pagesize=pagesize,
         )
 
-    async def favlist(self, fid: int, vmid: int, page: int = 1, pagesize: int = 20):
+    async def favlist(self, *, fid: int, vmid: int, page: int = 1, pagesize: int = 20):
         return await self.base.favorite_video(
             fid=fid,
             vmid=vmid,

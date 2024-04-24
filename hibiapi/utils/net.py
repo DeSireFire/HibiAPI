@@ -1,8 +1,14 @@
-import asyncio
 import functools
-from threading import current_thread
+from collections.abc import Coroutine
 from types import TracebackType
-from typing import Any, Callable, Coroutine, Dict, Optional, Type, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from httpx import (
     URL,
@@ -24,6 +30,8 @@ AsyncCallable_T = TypeVar("AsyncCallable_T", bound=Callable[..., Coroutine])
 
 
 class AsyncHTTPClient(AsyncClient):
+    net_client: "BaseNetClient"
+
     @staticmethod
     async def _log_request(request: Request):
         method, url = request.method, request.url
@@ -53,56 +61,58 @@ class AsyncHTTPClient(AsyncClient):
 
 
 class BaseNetClient:
+    connections: ClassVar[int] = 0
+    clients: ClassVar[list[AsyncHTTPClient]] = []
+
+    client: Optional[AsyncHTTPClient] = None
+
     def __init__(
         self,
-        headers: Optional[Dict[str, Any]] = None,
+        headers: Optional[dict[str, Any]] = None,
         cookies: Optional[Cookies] = None,
-        proxies: Optional[Dict[str, str]] = None,
-        client_class: Optional[Type[AsyncHTTPClient]] = None,
+        proxies: Optional[dict[str, str]] = None,
+        client_class: type[AsyncHTTPClient] = AsyncHTTPClient,
     ):
-        self.headers: Dict[str, Any] = headers or {}
-        self.cookies: Cookies = cookies or Cookies()
-        self.proxies: Dict[str, str] = proxies or {}
-        self.clients: Dict[int, AsyncHTTPClient] = {}
-        self.client_class: Type[AsyncHTTPClient] = client_class or AsyncHTTPClient
+        self.cookies, self.client_class = cookies or Cookies(), client_class
+        self.headers: dict[str, Any] = headers or {}
+        self.proxies: Any = proxies or {}  # Bypass type checker
 
-    async def __aenter__(self) -> AsyncHTTPClient:
-        tid = current_thread().ident or 1
-        if tid not in self.clients:
-            self.clients[tid] = await self.client_class(
-                headers=self.headers,
-                proxies=self.proxies,  # type:ignore
-                cookies=self.cookies,
-                http2=True,
-            ).__aenter__()
-        return self.clients[tid]
+        self.create_client()
+
+    def create_client(self):
+        self.client = self.client_class(
+            headers=self.headers,
+            proxies=self.proxies,
+            cookies=self.cookies,
+            http2=True,
+            follow_redirects=True,
+        )
+        self.client.net_client = self
+        BaseNetClient.clients.append(self.client)
+        return self.client
+
+    async def __aenter__(self):
+        if not self.client or self.client.is_closed:
+            self.client = await self.create_client().__aenter__()
+
+        self.__class__.connections += 1
+        return self.client
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]] = None,
+        exc_type: Optional[type[BaseException]] = None,
         exc_value: Optional[BaseException] = None,
         traceback: Optional[TracebackType] = None,
     ):
-        if exc_type is None:
-            return
-        tid = current_thread().ident or 1
-        if tid not in self.clients:
-            return
-        await self.clients.pop(tid).__aexit__(exc_type, exc_value, traceback)
+        self.__class__.connections -= 1
 
-    def __del__(self):
-        try:
-            asyncio.get_event_loop()
-        except ImportError:
+        if not (exc_type and exc_value and traceback):
             return
-        asyncio.ensure_future(
-            asyncio.gather(
-                *map(
-                    lambda f: f.aclose(),
-                    self.clients.values(),
-                ),
-            )
-        )
+        if self.client and not self.client.is_closed:
+            client = self.client
+            self.client = None
+            await client.__aexit__(exc_type, exc_value, traceback)
+        return
 
 
 def catch_network_error(function: AsyncCallable_T) -> AsyncCallable_T:

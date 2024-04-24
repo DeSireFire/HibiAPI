@@ -1,11 +1,11 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, overload
+from typing import Any, Optional, TypeVar, overload
 
-import confuse  # type:ignore
+import confuse
 import dotenv
-from pydantic.generics import GenericModel
+from pydantic import parse_obj_as
 
 from hibiapi import __file__ as root_file
 
@@ -15,48 +15,34 @@ DEFAULT_DIR = Path(root_file).parent / "configs"
 _T = TypeVar("_T")
 
 
-def _generate_default() -> int:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    generated = 0
-    for file in os.listdir(DEFAULT_DIR):
-        default_path = DEFAULT_DIR / file
-        config_path = CONFIG_DIR / file
-        if config_path.is_file():
-            continue
-        generated += config_path.write_text(
-            default_path.read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    return generated
-
-
-if dotenv.find_dotenv():
-    assert dotenv.load_dotenv(), "Failed to load .env"
-else:
-    assert _generate_default() <= 0, "Please complete config file!"
-
-
-class _TypeChecker(GenericModel, Generic[_T]):
-    value: _T
-
-
 class ConfigSubView(confuse.Subview):
     @overload
-    def get(self) -> Any:
-        ...
+    def get(self) -> Any: ...
 
     @overload
-    def get(self, template: Type[_T]) -> _T:
-        ...
+    def get(self, template: type[_T]) -> _T: ...
 
-    def get(self, template: Optional[Type[_T]] = None) -> _T:
-        return _TypeChecker[template or Any](value=super().get()).value  # type:ignore
+    def get(self, template: Optional[type[_T]] = None):  # type: ignore
+        object_ = super().get()
+        if template is not None:
+            return parse_obj_as(template, object_)
+        return object_
+
+    def get_optional(self, template: type[_T]) -> Optional[_T]:
+        try:
+            return self.get(template)
+        except Exception:
+            return None
 
     def as_str(self) -> str:
         return self.get(str)
 
-    def as_str_seq(self, split: str = "\n") -> List[str]:
-        return self.as_str().strip().split(split)
+    def as_str_seq(self, split: str = "\n") -> list[str]:  # type: ignore
+        return [
+            stripped
+            for line in self.as_str().strip().split(split)
+            if (stripped := line.strip())
+        ]
 
     def as_number(self) -> int:
         return self.get(int)
@@ -67,8 +53,8 @@ class ConfigSubView(confuse.Subview):
     def as_path(self) -> Path:
         return self.get(Path)
 
-    def as_dict(self) -> Dict[str, Any]:
-        return self.get(Dict[str, Any])
+    def as_dict(self) -> dict[str, Any]:
+        return self.get(dict[str, Any])
 
     def __getitem__(self, key: str) -> "ConfigSubView":
         return self.__class__(self, key)
@@ -77,7 +63,7 @@ class ConfigSubView(confuse.Subview):
 class AppConfig(confuse.Configuration):
     def __init__(self, name: str):
         self._config_name = name
-        self._config = CONFIG_DIR / (filename := name + ".yml")
+        self._config = CONFIG_DIR / (filename := f"{name}.yml")
         self._default = DEFAULT_DIR / filename
         super().__init__(name)
         self._add_env_source()
@@ -89,14 +75,16 @@ class AppConfig(confuse.Configuration):
         return str(self._config)
 
     def _add_env_source(self):
-        config_name = self._config_name.lower() + "_"
+        if dotenv.find_dotenv():
+            dotenv.load_dotenv()
+        config_name = f"{self._config_name.lower()}_"
         env_configs = {
             k[len(config_name) :].lower(): str(v)
             for k, v in os.environ.items()
             if k.lower().startswith(config_name)
         }
         # Convert `AAA_BBB_CCC=DDD` to `{'aaa':{'bbb':{'ccc':'ddd'}}}`
-        source_tree: Dict[str, Any] = {}
+        source_tree: dict[str, Any] = {}
         for key, value in env_configs.items():
             _tmp = source_tree
             *nodes, name = key.split("_")
@@ -131,6 +119,3 @@ class APIConfig(GeneralConfig):
 
 
 Config = GeneralConfig("general")
-
-DATA_PATH = Config["data"]["path"].as_path().expanduser().absolute()
-DEBUG = Config["debug"].as_bool()

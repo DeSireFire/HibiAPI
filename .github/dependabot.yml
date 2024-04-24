@@ -6,7 +6,12 @@
 version: 2
 updates:
   - package-ecosystem: pip # See documentation for possible values
-    versioning-strategy: auto
     directory: "/" # Location of package manifests
     schedule:
-      interval: "daily"
+      interval: weekly
+    versioning-strategy: lockfile-only
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

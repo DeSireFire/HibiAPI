@@ -1,17 +1,19 @@
 from datetime import datetime
 from enum import Enum
 from io import BytesIO
+from os import fdopen
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Literal, Optional, cast
 
-from PIL import Image  # type:ignore
-from pydantic import AnyHttpUrl, BaseModel, Field, conint, validate_arguments
+from PIL import Image
+from pydantic import AnyHttpUrl, BaseModel, Field, validate_arguments
 from pydantic.color import Color
-from qrcode import QRCode, constants  # type:ignore
-from qrcode.image.pil import PilImage  # type:ignore
+from qrcode import constants
+from qrcode.image.pil import PilImage
+from qrcode.main import QRCode
 
 from hibiapi.utils.config import APIConfig
-from hibiapi.utils.decorators import ToAsync
+from hibiapi.utils.decorators import ToAsync, enum_auto_doc
 from hibiapi.utils.exceptions import ClientSideException
 from hibiapi.utils.net import BaseNetClient
 from hibiapi.utils.routing import BaseHostUrl
@@ -21,21 +23,37 @@ Config = APIConfig("qrcode")
 
 
 class HostUrl(BaseHostUrl):
-    allowed_hosts = Config["qrcode"]["icon-site"].get(List[str])
+    allowed_hosts = Config["qrcode"]["icon-site"].get(list[str])
 
 
+@enum_auto_doc
 class QRCodeLevel(str, Enum):
-    L = "L"
-    M = "M"
-    Q = "Q"
-    H = "H"
+    """二维码容错率"""
+
+    LOW = "L"
+    """最低容错率"""
+    MEDIUM = "M"
+    """中等容错率"""
+    QUARTILE = "Q"
+    """高容错率"""
+    HIGH = "H"
+    """最高容错率"""
 
 
+@enum_auto_doc
 class ReturnEncode(str, Enum):
+    """二维码返回的编码方式"""
+
     raw = "raw"
+    """直接重定向到二维码图片"""
     json = "json"
+    """返回JSON格式的二维码信息"""
     js = "js"
     jsc = "jsc"
+
+
+COLOR_WHITE = Color("FFFFFF")
+COLOR_BLACK = Color("000000")
 
 
 class QRInfo(BaseModel):
@@ -44,8 +62,8 @@ class QRInfo(BaseModel):
     time: datetime = Field(default_factory=datetime.now)
     data: str
     logo: Optional[HostUrl] = None
-    level: QRCodeLevel = QRCodeLevel.M
-    size: int = 200  # type:ignore
+    level: QRCodeLevel = QRCodeLevel.MEDIUM
+    size: int = 200
     code: Literal[0] = 0
     status: Literal["success"] = "success"
 
@@ -55,15 +73,15 @@ class QRInfo(BaseModel):
         cls,
         text: str,
         *,
-        size: conint(  # type:ignore
-            strict=True,
-            gt=Config["qrcode"]["min-size"].as_number(),  # noqa:F821
-            lt=Config["qrcode"]["max-size"].as_number(),  # noqa:F821
-        ) = 200,
+        size: int = Field(
+            200,
+            gt=Config["qrcode"]["min-size"].as_number(),
+            lt=Config["qrcode"]["max-size"].as_number(),
+        ),
         logo: Optional[HostUrl] = None,
-        level: QRCodeLevel = QRCodeLevel.M,
-        bgcolor: Color = Color("FFFFFF"),
-        fgcolor: Color = Color("000000"),
+        level: QRCodeLevel = QRCodeLevel.MEDIUM,
+        bgcolor: Color = COLOR_WHITE,
+        fgcolor: Color = COLOR_BLACK,
     ):
         icon_stream = None
         if logo is not None:
@@ -95,27 +113,30 @@ class QRInfo(BaseModel):
         text: str,
         *,
         size: int = 200,
-        level: QRCodeLevel = QRCodeLevel.M,
+        level: QRCodeLevel = QRCodeLevel.MEDIUM,
         icon_stream: Optional[BytesIO] = None,
         bgcolor: str = "#FFFFFF",
         fgcolor: str = "#000000",
     ) -> Path:
         qr = QRCode(
             error_correction={
-                QRCodeLevel.L: constants.ERROR_CORRECT_L,
-                QRCodeLevel.M: constants.ERROR_CORRECT_M,
-                QRCodeLevel.Q: constants.ERROR_CORRECT_Q,
-                QRCodeLevel.H: constants.ERROR_CORRECT_H,
+                QRCodeLevel.LOW: constants.ERROR_CORRECT_L,
+                QRCodeLevel.MEDIUM: constants.ERROR_CORRECT_M,
+                QRCodeLevel.QUARTILE: constants.ERROR_CORRECT_Q,
+                QRCodeLevel.HIGH: constants.ERROR_CORRECT_H,
             }[level],
             border=2,
             box_size=8,
         )
         qr.add_data(text)
-        image: Image.Image = qr.make_image(
-            PilImage,
-            back_color=bgcolor,
-            fill_color=fgcolor,
-        ).get_image()  # type:ignore
+        image = cast(
+            Image.Image,
+            qr.make_image(
+                PilImage,
+                back_color=bgcolor,
+                fill_color=fgcolor,
+            ).get_image(),
+        )
         image = image.resize((size, size))
         if icon_stream is not None:
             try:
@@ -133,5 +154,7 @@ class QRInfo(BaseModel):
                 ),
                 mask=icon if icon.mode == "RGBA" else None,
             )
-        image.save(file := TempFile.create(ext=".png"))
-        return file
+        descriptor, path = TempFile.create(".png")
+        with fdopen(descriptor, "wb") as f:
+            image.save(f, format="PNG")
+        return path
